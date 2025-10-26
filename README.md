@@ -17,87 +17,82 @@ This project demonstrates how to crawl player statistics for the 2024-2025 Premi
     └── collect_data.py       # Crawl FBref + FootballTransfers and populate SQLite
 ```
 
-## 1. Data Collection
+## 1. Chuẩn bị môi trường
 
-1. Install dependencies and activate a virtual environment:
+Thực hiện bước này trước khi chạy bất kỳ thành phần nào của bài tập.
+
+1. Tạo và kích hoạt môi trường ảo (tuỳ chọn nhưng được khuyến nghị).
 
    ```bash
    python -m venv .venv
    source .venv/bin/activate
+   ```
+
+2. Cài đặt toàn bộ phụ thuộc Python.
+
+   ```bash
    pip install -r requirements.txt
    ```
 
-2. Run the collector. By default it targets the 2024-2025 season and filters players with more than 90 minutes played.
+## 2. Thu thập dữ liệu (I.1 & I.2)
 
-   ```bash
-   python scripts/collect_data.py --season 2024-2025 --min-minutes 90
-   ```
+Thực thi script thu thập dữ liệu đúng thứ tự yêu cầu: trước tiên lấy thống kê cầu thủ từ FBref, sau đó bổ sung giá trị chuyển nhượng từ FootballTransfers và lưu toàn bộ vào SQLite.
 
-   The script performs the following steps:
+```bash
+python scripts/collect_data.py --season 2024-2025 --min-minutes 90
+```
 
-   * Downloads the `Standard Stats` table from FBref, converts it into a Pandas `DataFrame`,
-     filters players who have accumulated more than 90 minutes, and writes the data into the
-     `player_stats` table of `data/premier_league.db`.
-   * Iterates through every player and attempts to retrieve their current transfer value from
-     [footballtransfers.com](https://www.footballtransfers.com). Transfer valuations are stored in the
-     `player_transfers` table.
-   * Missing or unavailable values are persisted as `N/a` per the assignment requirements.
+Script này sẽ:
 
-### Handling CAPTCHA and Rate Limiting
+* Tải bảng `Standard Stats` của từng đội bóng tại FBref, lọc cầu thủ có thời lượng thi đấu > 90 phút và ghi vào bảng `player_stats` của `data/premier_league.db`.
+* Với mỗi cầu thủ vừa ghi nhận, cố gắng lấy giá trị chuyển nhượng từ [footballtransfers.com](https://www.footballtransfers.com) và lưu vào bảng `player_transfers`.
+* Đối với chỉ số không tồn tại, dữ liệu sẽ được đặt thành `N/a`.
 
-The scrapers use a shared `HttpClient` that adds:
+### Gợi ý xử lý CAPTCHA hoặc rate-limit
 
-* Randomised delays between requests.
-* Retry logic with exponential backoff for HTTP 429/5xx responses.
-* A desktop browser `User-Agent` string.
+* Client HTTP tích hợp độ trễ ngẫu nhiên giữa các request, retry với exponential backoff khi gặp HTTP 429/5xx và mô phỏng `User-Agent` của trình duyệt desktop.
+* Có thể bổ sung lưu cache HTML, xoay proxy/VPN, hoặc chuyển sang Selenium (undetected-chromedriver) nếu gặp CAPTCHA phức tạp.
 
-If the target websites still trigger anti-bot mechanisms you can further harden the collector by:
+## 3. Cung cấp RESTful API tra cứu dữ liệu (II.1)
 
-* Persisting intermediate HTML pages and reusing them when re-running the script.
-* Rotating through a pool of proxy servers or VPN endpoints.
-* Introducing a headless browser fallback (e.g. Selenium with undetected-chromedriver) for
-  pages that require JavaScript rendering or trigger CAPTCHA challenges.
-
-## 2. RESTful API
-
-The Flask application serves two endpoints that read from the SQLite database:
-
-* `GET /api/players?name=<player name>` – returns every record that matches a specific player.
-* `GET /api/players?club=<club name>` – returns every player assigned to the requested club.
-
-Both responses include transfer information when available. Start the API with:
+Sau khi cơ sở dữ liệu được tạo ở bước 2, khởi chạy dịch vụ Flask để cung cấp API theo yêu cầu đề bài:
 
 ```bash
 python app.py
 ```
 
-## 3. Command Line Lookup Client
+Các endpoint chính:
 
-`lookup.py` is a thin wrapper around the REST API. It prints the response as a table and stores it in a CSV file named after the search key.
+* `GET /api/players?name=<tên cầu thủ>`: trả về toàn bộ chỉ số của cầu thủ tương ứng.
+* `GET /api/players?club=<tên câu lạc bộ>`: trả về toàn bộ cầu thủ thuộc câu lạc bộ đó.
+
+## 4. Viết chương trình tra cứu bằng Requests (II.2)
+
+Khi Flask API đang chạy, sử dụng CLI `lookup.py` để truy vấn và xuất dữ liệu thành bảng + CSV:
 
 ```bash
 python lookup.py --name "Erling Haaland"
 python lookup.py --club "Liverpool"
 ```
 
-The CLI expects the Flask service to be reachable on `http://localhost:5000`.
+File CSV kết quả sẽ được đặt tên theo cầu thủ hoặc câu lạc bộ (ví dụ: `Erling Haaland.csv`).
 
-## 4. Statistical Analysis & Machine Learning
+## 5. Phân tích thống kê và máy học (III)
 
-The `analytics.py` module reads all player statistics from the database and produces:
+`analytics.py` đọc dữ liệu trong SQLite và thực hiện các bước theo đề bài:
 
-* Per-team median, mean, and standard deviation for every numeric feature (`artifacts/team_statistics.csv`).
-* The best-performing team for each metric (`artifacts/best_team_by_metric.csv`).
-* A simple data-driven valuation score for each player (`artifacts/player_valuation_scores.csv`).
-* K-Means clustering with elbow and silhouette diagnostics, plus the chosen cluster assignments (`artifacts/player_clusters.csv`).
-* PCA scatter plots in 2D and 3D saved into the `artifacts/` folder.
+1. Tính trung vị, trung bình, độ lệch chuẩn cho từng chỉ số của mỗi đội và lưu vào `artifacts/team_statistics.csv`.
+2. Tìm đội bóng dẫn đầu từng chỉ số, ghi vào `artifacts/best_team_by_metric.csv`, đồng thời hỗ trợ đánh giá phong độ.
+3. Đề xuất phương pháp định giá cầu thủ dựa trên dữ liệu, kết quả lưu tại `artifacts/player_valuation_scores.csv`.
+4. Chạy K-Means, vẽ biểu đồ Elbow và Silhouette, lưu cụm vào `artifacts/player_clusters.csv`.
+5. Giảm số chiều bằng PCA (2D, 3D) và vẽ scatter plot vào thư mục `artifacts/`.
 
-Run the analytics pipeline with:
+Chạy toàn bộ pipeline bằng:
 
 ```bash
 python analytics.py
 ```
 
-## 5. Reporting
+## 6. Tổng hợp báo cáo cuối cùng
 
-All generated CSV files and visualisations under `artifacts/` can be incorporated into the written PDF report alongside any additional commentary or interpretations of the results.
+Sử dụng dữ liệu và biểu đồ trong thư mục `artifacts/` cùng với nhận xét, phân tích bổ sung để hoàn thiện báo cáo PDF theo yêu cầu nộp bài.
